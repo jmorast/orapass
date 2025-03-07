@@ -11,10 +11,10 @@ chmod +x /usr/local/bin/orapass
 ```
 
 # Usage
-Required first step, this creates /opt/oracle/orapass and sets up Oracle Wallet.
+Required first step, this creates /opt/oracle/orapass and sets up Oracle Wallet. 
 
 ```
-orapass init
+orapass init [password]
 ````
 
 
