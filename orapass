@@ -1,0 +1,169 @@
+#!/bin/bash
+#
+# orapass is licensed under the MIT License, which allows free use, modification, and distribution.
+#
+# No Warranty: This software is provided "as is" without any warranty.
+# The author is not responsible for any data loss, security breaches, or system issues resulting from its use. Use at your own risk.
+#
+# Author: Joshua Morast
+# 
+# 2025-03: Initial script creation 
+# 
+WALLET_DIR="/opt/oracle/orapass"
+ORACLE_USER="oracle"
+
+# Ensure script is run as 'oracle' user
+if [ "$(whoami)" != "$ORACLE_USER" ]; then
+    echo "Error: This script must be run as the '$ORACLE_USER' user." >&2
+    exit 1
+fi
+
+# Ensure mkstore is available
+if ! command -v mkstore &>/dev/null; then
+    echo "Error: mkstore command not found. Ensure Oracle Client is installed." >&2
+    exit 1
+fi
+
+# Function to print usage
+usage() {
+    echo "usage: orapass help"
+    echo "               list"
+    echo "               remove db user"
+    echo "               put db user pass"
+    echo "               get db user"
+    echo "               init"
+    echo ""
+    echo "Command Information:"
+    echo "  help    print this information"
+    echo "  list    list all keys"
+    echo "  remove  remove db user from wallet"
+    echo "  put     set password for db user"
+    echo "  get     print password for db user"
+    echo "  init    creates the wallet if it doesn't already exist"
+}
+
+# Function to check if the wallet exists
+check_wallet_exists() {
+    if [ ! -d "$WALLET_DIR" ] || [ ! -f "$WALLET_DIR/ewallet.p12" ]; then
+        echo "Error: Wallet not initialized. Run 'orapass init' first." >&2
+        exit 1
+    fi
+}
+
+# Function to initialize wallet
+init_wallet() {
+    if [ -d "$WALLET_DIR" ]; then
+        echo "Error: Wallet directory already exists at $WALLET_DIR" >&2
+        exit 1
+    fi
+
+    mkdir -p "$WALLET_DIR"
+    chmod 700 "$WALLET_DIR"
+
+    # Create a new wallet with a random password
+    orapki wallet create -wallet "$WALLET_DIR" -pwd "$(openssl rand -base64 12)" -auto_login
+    if [ $? -ne 0 ]; then
+        echo "Error: Failed to create Oracle Wallet" >&2
+        exit 1
+    fi
+
+    # Enable auto-login
+    mkstore -wrl "$WALLET_DIR" -createALO
+    echo "Wallet initialized at $WALLET_DIR"
+}
+
+# Function to list credentials
+list_credentials() {
+    check_wallet_exists
+    mkstore -wrl "$WALLET_DIR" -listCredential
+}
+
+# Function to put a new credential
+put_credential() {
+    check_wallet_exists
+
+    if [ $# -ne 3 ]; then
+        echo "Error: Missing arguments for put. Usage: orapass put db user pass" >&2
+        exit 1
+    fi
+
+    local db=$1
+    local user=$2
+    local pass=$3
+    local alias="${db}_${user}"
+
+    if mkstore -wrl "$WALLET_DIR" -listCredential | grep -q "$alias"; then
+        echo "Error: Credential for $db/$user already exists" >&2
+        exit 1
+    fi
+
+    mkstore -wrl "$WALLET_DIR" -createCredential "$alias" "$user" "$pass"
+    echo "Stored credential for $db/$user"
+}
+
+# Function to get a password
+get_password() {
+    check_wallet_exists
+
+    if [ $# -ne 2 ]; then
+        echo "Error: Missing arguments for get. Usage: orapass get db user" >&2
+        exit 1
+    fi
+
+    local db=$1
+    local user=$2
+    local alias="${db}_${user}"
+
+    # Determine the correct password index
+    local index
+    index=$(mkstore -wrl "$WALLET_DIR" -listCredential | grep "$alias" | cut -d':' -f1)
+
+    if [ -z "$index" ]; then
+        echo "Error: Credential for $db/$user not found" >&2
+        exit 1
+    fi
+
+    # Extract the stored password using the correct entry format
+    local password
+    password=$(mkstore -wrl "$WALLET_DIR" -viewEntry "oracle.security.client.password${index}" 2>/dev/null | grep password | awk -F'= ' '{print $2}')
+
+    if [ -z "$password" ]; then
+        echo "Error: Failed to retrieve password for $db/$user" >&2
+        exit 1
+    fi
+
+    echo "$password"
+}
+
+# Function to remove a credential
+remove_credential() {
+    check_wallet_exists
+
+    if [ $# -ne 2 ]; then
+        echo "Error: Missing arguments for remove. Usage: orapass remove db user" >&2
+        exit 1
+    fi
+
+    local db=$1
+    local user=$2
+    local alias="${db}_${user}"
+
+    mkstore -wrl "$WALLET_DIR" -deleteCredential "$alias"
+    echo "Removed credential for $db/$user"
+}
+
+# Parse command
+case "$1" in
+    help) usage ;;
+    init) init_wallet ;;
+    list) list_credentials ;;
+    put) shift; put_credential "$@" ;;
+    get) shift; get_password "$@" ;;
+    remove) shift; remove_credential "$@" ;;
+    *)
+        echo "Invalid command. Use 'orapass help' for usage." >&2
+	echo
+	usage
+        exit 1
+        ;;
+esac
