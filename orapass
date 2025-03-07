@@ -5,10 +5,6 @@
 # No Warranty: This software is provided "as is" without any warranty.
 # The author is not responsible for any data loss, security breaches, or system issues resulting from its use. Use at your own risk.
 #
-# Author: Joshua Morast
-# 
-# 2025-03: Initial script creation 
-# 
 WALLET_DIR="/opt/oracle/orapass"
 ORACLE_USER="oracle"
 
@@ -31,7 +27,7 @@ usage() {
     echo "               remove db user"
     echo "               put db user pass"
     echo "               get db user"
-    echo "               init"
+    echo "               init [password]"
     echo ""
     echo "Command Information:"
     echo "  help    print this information"
@@ -39,13 +35,13 @@ usage() {
     echo "  remove  remove db user from wallet"
     echo "  put     set password for db user"
     echo "  get     print password for db user"
-    echo "  init    creates the wallet if it doesn't already exist"
+    echo "  init    creates the wallet (requires password input)"
 }
 
 # Function to check if the wallet exists
 check_wallet_exists() {
     if [ ! -d "$WALLET_DIR" ] || [ ! -f "$WALLET_DIR/ewallet.p12" ]; then
-        echo "Error: Wallet not initialized. Run 'orapass init' first." >&2
+        echo "Error: Wallet not initialized. Run 'orapass init <password>' first." >&2
         exit 1
     fi
 }
@@ -60,14 +56,20 @@ init_wallet() {
     mkdir -p "$WALLET_DIR"
     chmod 700 "$WALLET_DIR"
 
-    # Create a new wallet with a random password
-    orapki wallet create -wallet "$WALLET_DIR" -pwd "$(openssl rand -base64 12)" -auto_login
+    local wallet_password="$1"
+
+    if [ -z "$wallet_password" ]; then
+        echo -n "Enter a password for the Oracle Wallet: "
+        read -s wallet_password
+        echo
+    fi
+
+    orapki wallet create -wallet "$WALLET_DIR" -pwd "$wallet_password" -auto_login
     if [ $? -ne 0 ]; then
         echo "Error: Failed to create Oracle Wallet" >&2
         exit 1
     fi
 
-    # Enable auto-login
     mkstore -wrl "$WALLET_DIR" -createALO
     echo "Wallet initialized at $WALLET_DIR"
 }
@@ -114,18 +116,13 @@ get_password() {
     local user=$2
     local alias="${db}_${user}"
 
-    # Determine the correct password index
-    local index
-    index=$(mkstore -wrl "$WALLET_DIR" -listCredential | grep "$alias" | cut -d':' -f1)
-
-    if [ -z "$index" ]; then
+    if ! mkstore -wrl "$WALLET_DIR" -listCredential | grep -q "$alias"; then
         echo "Error: Credential for $db/$user not found" >&2
         exit 1
     fi
 
-    # Extract the stored password using the correct entry format
     local password
-    password=$(mkstore -wrl "$WALLET_DIR" -viewEntry "oracle.security.client.password${index}" 2>/dev/null | grep password | awk -F'= ' '{print $2}')
+    password=$(mkstore -wrl "$WALLET_DIR" -viewEntry "$alias" 2>/dev/null | awk -F'= ' '{print $2}')
 
     if [ -z "$password" ]; then
         echo "Error: Failed to retrieve password for $db/$user" >&2
@@ -155,15 +152,14 @@ remove_credential() {
 # Parse command
 case "$1" in
     help) usage ;;
-    init) init_wallet ;;
+    init) shift; init_wallet "$@" ;;
     list) list_credentials ;;
     put) shift; put_credential "$@" ;;
     get) shift; get_password "$@" ;;
     remove) shift; remove_credential "$@" ;;
     *)
         echo "Invalid command. Use 'orapass help' for usage." >&2
-	echo
-	usage
         exit 1
         ;;
 esac
+ 
